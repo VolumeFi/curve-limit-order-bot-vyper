@@ -11,6 +11,7 @@ enum WithdrawType:
     CANCEL
     PROFIT_TAKING
     STOP_LOSS
+    EXPIRE
 
 interface ERC20:
     def balanceOf(_owner: address) -> uint256: view
@@ -36,6 +37,7 @@ event Deposited:
     depositor: address
     profit_taking: uint256
     stop_loss: uint256
+    expire: uint256
 
 event Withdrawn:
     deposit_id: uint256
@@ -111,7 +113,7 @@ def _safe_transfer_from(_token: address, _from: address, _to: address, _value: u
 @external
 @payable
 @nonreentrant("lock")
-def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, pools: address[4], profit_taking: uint256, stop_loss: uint256):
+def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, pools: address[4], profit_taking: uint256, stop_loss: uint256, expire: uint256):
     _value: uint256 = msg.value
     _fee: uint256 = self.fee
     assert _value >= _fee, "Insufficient fee"
@@ -136,7 +138,7 @@ def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, pool
     deposit_id: uint256 = self.deposit_size
     self.deposits[deposit_id] = deposit
     self.deposit_size = unsafe_add(deposit_id, 1)
-    log Deposited(deposit_id, route[0], deposit.route[0], amount, msg.sender, profit_taking, stop_loss)
+    log Deposited(deposit_id, route[0], deposit.route[0], amount, msg.sender, profit_taking, stop_loss, expire)
 
 @internal
 @nonreentrant("lock")
@@ -152,35 +154,42 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
         depositor: msg.sender
     })
     assert deposit.amount > 0, "Empty deposit"
-    last_token: address = empty(address)
-    for i in range(4):
-        last_token = deposit.route[8 - i * 2]
-        if last_token != empty(address):
-            break
-    amount0: uint256 = 0
-    service_fee: uint256 = 0
-    if deposit.route[0] == VETH:
-        amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self, value=deposit.amount)
-        service_fee = amount0 * 5 / 1000
-        if last_token == VETH:
-            send(deposit.depositor, amount0 - service_fee)
-            send(self.refund_wallet, service_fee)
+    if withdraw_type == WithdrawType.EXPIRE:
+        if deposit.route[0] == VETH:
+            send(deposit.depositor, deposit.amount)
         else:
-            self._safe_transfer(last_token, deposit.depositor, amount0 - service_fee)
-            self._safe_transfer(last_token, self.refund_wallet, service_fee)
+            self._safe_transfer(deposit.route[0], deposit.depositor, deposit.amount)
+        return deposit.amount
     else:
-        self._safe_approve(deposit.route[0], ROUTER, deposit.amount)
-        amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
-        service_fee = amount0 * 5 / 1000
-        if last_token == VETH:
-            send(deposit.depositor, amount0 - service_fee)
-            send(self.refund_wallet, service_fee)
+        last_token: address = empty(address)
+        for i in range(4):
+            last_token = deposit.route[8 - i * 2]
+            if last_token != empty(address):
+                break
+        amount0: uint256 = 0
+        service_fee: uint256 = 0
+        if deposit.route[0] == VETH:
+            amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self, value=deposit.amount)
+            service_fee = amount0 * 5 / 1000
+            if last_token == VETH:
+                send(deposit.depositor, amount0 - service_fee)
+                send(self.refund_wallet, service_fee)
+            else:
+                self._safe_transfer(last_token, deposit.depositor, amount0 - service_fee)
+                self._safe_transfer(last_token, self.refund_wallet, service_fee)
         else:
-            self._safe_transfer(last_token, deposit.depositor, amount0 - service_fee)
-            self._safe_transfer(last_token, self.refund_wallet, service_fee)
+            self._safe_approve(deposit.route[0], ROUTER, deposit.amount)
+            amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
+            service_fee = amount0 * 5 / 1000
+            if last_token == VETH:
+                send(deposit.depositor, amount0 - service_fee)
+                send(self.refund_wallet, service_fee)
+            else:
+                self._safe_transfer(last_token, deposit.depositor, amount0 - service_fee)
+                self._safe_transfer(last_token, self.refund_wallet, service_fee)
 
-    log Withdrawn(deposit_id, msg.sender, withdraw_type, amount0)
-    return amount0
+        log Withdrawn(deposit_id, msg.sender, withdraw_type, amount0)
+        return amount0
 
 @external
 def cancel(deposit_id: uint256, expected: uint256) -> uint256:
