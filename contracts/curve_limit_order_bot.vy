@@ -154,7 +154,7 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
         depositor: msg.sender
     })
     assert deposit.amount > 0, "Empty deposit"
-    if withdraw_type == WithdrawType.EXPIRE:
+    if withdraw_type == WithdrawType.CANCEL or withdraw_type == WithdrawType.EXPIRE:
         if deposit.route[0] == VETH:
             send(deposit.depositor, deposit.amount)
         else:
@@ -167,28 +167,28 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
             if last_token != empty(address):
                 break
         amount0: uint256 = 0
-        service_fee: uint256 = 0
+        actual_amount: uint256 = 0
         if deposit.route[0] == VETH:
             amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self, value=deposit.amount)
-            service_fee = amount0 * 5 / 1000
+            actual_amount = unsafe_div(amount0 * 995, 1000)
             if last_token == VETH:
-                send(deposit.depositor, amount0 - service_fee)
-                send(self.refund_wallet, service_fee)
+                send(deposit.depositor, actual_amount)
+                send(self.refund_wallet, unsafe_sub(amount0, actual_amount))
             else:
-                self._safe_transfer(last_token, deposit.depositor, amount0 - service_fee)
-                self._safe_transfer(last_token, self.refund_wallet, service_fee)
+                self._safe_transfer(last_token, deposit.depositor, actual_amount)
+                self._safe_transfer(last_token, self.refund_wallet, unsafe_sub(amount0, actual_amount))
         else:
             self._safe_approve(deposit.route[0], ROUTER, deposit.amount)
             amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
-            service_fee = amount0 * 5 / 1000
+            actual_amount = unsafe_div(amount0 * 995, 1000)
             if last_token == VETH:
-                send(deposit.depositor, amount0 - service_fee)
-                send(self.refund_wallet, service_fee)
+                send(deposit.depositor, actual_amount)
+                send(self.refund_wallet, unsafe_sub(amount0, actual_amount))
             else:
-                self._safe_transfer(last_token, deposit.depositor, amount0 - service_fee)
-                self._safe_transfer(last_token, self.refund_wallet, service_fee)
+                self._safe_transfer(last_token, deposit.depositor, actual_amount)
+                self._safe_transfer(last_token, self.refund_wallet, unsafe_sub(amount0, actual_amount))
 
-        log Withdrawn(deposit_id, msg.sender, withdraw_type, amount0)
+        log Withdrawn(deposit_id, msg.sender, withdraw_type, actual_amount)
         return amount0
 
 @external
