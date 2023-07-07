@@ -160,12 +160,16 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
         depositor: msg.sender
     })
     assert deposit.amount > 0, "Empty deposit"
+    actual_amount: uint256 = 0
     if withdraw_type == WithdrawType.CANCEL or withdraw_type == WithdrawType.EXPIRE:
+        actual_amount = unsafe_div(deposit.amount * 995, 1000)
         if deposit.route[0] == VETH:
-            send(deposit.depositor, deposit.amount)
+            send(deposit.depositor, actual_amount)
+            send(self.refund_wallet, unsafe_sub(deposit.amount, actual_amount))
         else:
-            self._safe_transfer(deposit.route[0], deposit.depositor, deposit.amount)
-        log Withdrawn(deposit_id, msg.sender, withdraw_type, deposit.amount)
+            self._safe_transfer(deposit.route[0], deposit.depositor, actual_amount)
+            self._safe_transfer(deposit.route[0], self.refund_wallet, unsafe_sub(deposit.amount, actual_amount))
+        log Withdrawn(deposit_id, msg.sender, withdraw_type, actual_amount)
         return deposit.amount
     else:
         last_token: address = empty(address)
@@ -174,7 +178,6 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
             if last_token != empty(address):
                 break
         amount0: uint256 = 0
-        actual_amount: uint256 = 0
         if deposit.route[0] == VETH:
             amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self, value=deposit.amount)
             actual_amount = unsafe_div(amount0 * 995, 1000)
@@ -194,7 +197,6 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
             else:
                 self._safe_transfer(last_token, deposit.depositor, actual_amount)
                 self._safe_transfer(last_token, self.refund_wallet, unsafe_sub(amount0, actual_amount))
-
         log Withdrawn(deposit_id, msg.sender, withdraw_type, actual_amount)
         return amount0
 
