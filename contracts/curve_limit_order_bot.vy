@@ -1,5 +1,11 @@
 # @version 0.3.7
 
+"""
+@title Curve Limit Order Bot
+@license Apache 2.0
+@author Volume.finance
+"""
+
 struct Deposit:
     route: address[9]
     swap_params: uint256[3][4]
@@ -159,6 +165,7 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
             send(deposit.depositor, deposit.amount)
         else:
             self._safe_transfer(deposit.route[0], deposit.depositor, deposit.amount)
+        log Withdrawn(deposit_id, msg.sender, withdraw_type, deposit.amount)
         return deposit.amount
     else:
         last_token: address = empty(address)
@@ -207,6 +214,11 @@ def multiple_withdraw(deposit_ids: DynArray[uint256, MAX_SIZE], expected: DynArr
         if i >= len(deposit_ids):
             break
         self._withdraw(deposit_ids[i], expected[i], withdraw_types[i])
+
+@external
+def withdraw(deposit_id: uint256, withdraw_type: WithdrawType) -> uint256:
+    assert msg.sender == empty(address) # this will work as a view function only
+    return self._withdraw(deposit_id, 1, withdraw_type)
 
 @external
 def update_compass(new_compass: address):
