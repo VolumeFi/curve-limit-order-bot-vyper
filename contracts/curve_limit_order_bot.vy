@@ -127,6 +127,7 @@ def _safe_transfer_from(_token: address, _from: address, _to: address, _value: u
 @payable
 @nonreentrant("lock")
 def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, pools: address[4], profit_taking: uint256, stop_loss: uint256, expire: uint256):
+    assert block.timestamp < expire, "Invalidated expire"
     _value: uint256 = msg.value
     _fee: uint256 = self.fee
     assert _value >= _fee, "Insufficient fee"
