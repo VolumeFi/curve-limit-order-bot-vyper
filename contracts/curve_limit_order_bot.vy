@@ -66,6 +66,10 @@ event UpdateFee:
 event SetPaloma:
     paloma: bytes32
 
+event UpdateServiceFeeCollector:
+    old_service_fee_collector: address
+    new_service_fee_collector: address
+
 VETH: constant(address) = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE # Virtual ETH
 MAX_SIZE: constant(uint256) = 8
 ROUTER: immutable(address)
@@ -75,16 +79,19 @@ deposits: public(HashMap[uint256, Deposit])
 refund_wallet: public(address)
 fee: public(uint256)
 paloma: public(bytes32)
+service_fee_collector: public(address)
 
 @external
-def __init__(_compass: address, router: address, _refund_wallet: address, _fee: uint256):
+def __init__(_compass: address, router: address, _refund_wallet: address, _fee: uint256, _service_fee_collector: address):
     self.compass = _compass
     ROUTER = router
     self.refund_wallet = _refund_wallet
     self.fee = _fee
+    self.service_fee_collector = _service_fee_collector
     log UpdateCompass(empty(address), _compass)
     log UpdateRefundWallet(empty(address), _refund_wallet)
     log UpdateFee(0, _fee)
+    log UpdateServiceFeeCollector(empty(address), _service_fee_collector)
 
 @internal
 def _safe_approve(_token: address, _to: address, _value: uint256):
@@ -126,14 +133,13 @@ def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, pool
     assert self.paloma != empty(bytes32), "Paloma not set"
     send(self.refund_wallet, _fee)
     _value = unsafe_sub(_value, _fee)
-    token0: address = route[0]
-    if token0 == VETH:
+    if route[0] == VETH:
         assert _value >= amount, "Insufficient deposit"
         if _value > amount:
             send(msg.sender, unsafe_sub(_value, amount))
     else:
         send(msg.sender, _value)
-        self._safe_transfer_from(token0, msg.sender, self, amount)
+        self._safe_transfer_from(route[0], msg.sender, self, amount)
     deposit: Deposit = Deposit({
         route: route,
         swap_params: swap_params,
@@ -141,34 +147,39 @@ def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, pool
         pools: pools,
         depositor: msg.sender
     })
+    last_token: address = empty(address)
+    for i in range(4):
+        last_token = deposit.route[8 - i * 2]
+        if last_token != empty(address):
+            break
     deposit_id: uint256 = self.deposit_size
     self.deposits[deposit_id] = deposit
     self.deposit_size = unsafe_add(deposit_id, 1)
-    log Deposited(deposit_id, route[0], deposit.route[0], amount, msg.sender, profit_taking, stop_loss, expire)
+    log Deposited(deposit_id, route[0], last_token, amount, msg.sender, profit_taking, stop_loss, expire)
 
 @internal
 @nonreentrant("lock")
 def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawType) -> uint256:
     deposit: Deposit = self.deposits[deposit_id]
+    assert deposit.amount > 0, "Empty deposit"
     if withdraw_type == WithdrawType.CANCEL:
-        assert msg.sender == deposit.depositor, "Unauthorized"
+        assert msg.sender == deposit.depositor or msg.sender == empty(address), "Unauthorized"
     self.deposits[deposit_id] = Deposit({
         route: empty(address[9]),
         swap_params: empty(uint256[3][4]),
         amount: empty(uint256),
         pools: empty(address[4]),
-        depositor: msg.sender
+        depositor: empty(address)
     })
-    assert deposit.amount > 0, "Empty deposit"
     actual_amount: uint256 = 0
     if withdraw_type == WithdrawType.CANCEL or withdraw_type == WithdrawType.EXPIRE:
         actual_amount = unsafe_div(deposit.amount * 995, 1000)
         if deposit.route[0] == VETH:
             send(deposit.depositor, actual_amount)
-            send(self.refund_wallet, unsafe_sub(deposit.amount, actual_amount))
+            send(self.service_fee_collector, unsafe_sub(deposit.amount, actual_amount))
         else:
             self._safe_transfer(deposit.route[0], deposit.depositor, actual_amount)
-            self._safe_transfer(deposit.route[0], self.refund_wallet, unsafe_sub(deposit.amount, actual_amount))
+            self._safe_transfer(deposit.route[0], self.service_fee_collector, unsafe_sub(deposit.amount, actual_amount))
         log Withdrawn(deposit_id, msg.sender, withdraw_type, actual_amount)
         return deposit.amount
     else:
@@ -183,20 +194,20 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
             actual_amount = unsafe_div(amount0 * 995, 1000)
             if last_token == VETH:
                 send(deposit.depositor, actual_amount)
-                send(self.refund_wallet, unsafe_sub(amount0, actual_amount))
+                send(self.service_fee_collector, unsafe_sub(amount0, actual_amount))
             else:
                 self._safe_transfer(last_token, deposit.depositor, actual_amount)
-                self._safe_transfer(last_token, self.refund_wallet, unsafe_sub(amount0, actual_amount))
+                self._safe_transfer(last_token, self.service_fee_collector, unsafe_sub(amount0, actual_amount))
         else:
             self._safe_approve(deposit.route[0], ROUTER, deposit.amount)
             amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
             actual_amount = unsafe_div(amount0 * 995, 1000)
             if last_token == VETH:
                 send(deposit.depositor, actual_amount)
-                send(self.refund_wallet, unsafe_sub(amount0, actual_amount))
+                send(self.service_fee_collector, unsafe_sub(amount0, actual_amount))
             else:
                 self._safe_transfer(last_token, deposit.depositor, actual_amount)
-                self._safe_transfer(last_token, self.refund_wallet, unsafe_sub(amount0, actual_amount))
+                self._safe_transfer(last_token, self.service_fee_collector, unsafe_sub(amount0, actual_amount))
         log Withdrawn(deposit_id, msg.sender, withdraw_type, actual_amount)
         return amount0
 
@@ -244,7 +255,13 @@ def update_fee(new_fee: uint256):
 
 @external
 def set_paloma():
-    assert msg.sender == self.compass and self.paloma == empty(bytes32) and len(msg.data) == 36, "Invalid"
+    assert msg.sender == self.compass and self.paloma == empty(bytes32) and len(msg.data) == 36, "Unauthorized"
     _paloma: bytes32 = convert(slice(msg.data, 4, 32), bytes32)
     self.paloma = _paloma
     log SetPaloma(_paloma)
+
+@external
+def update_service_fee_collector(new_service_fee_collector: address):
+    assert msg.sender == self.service_fee_collector, "Unauthorized"
+    self.service_fee_collector = new_service_fee_collector
+    log UpdateServiceFeeCollector(msg.sender, new_service_fee_collector)
