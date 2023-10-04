@@ -297,3 +297,8 @@ def update_service_fee(new_service_fee: uint256):
     old_service_fee: uint256 = self.service_fee
     self.service_fee = new_service_fee
     log UpdateServiceFee(old_service_fee, new_service_fee)
+
+@external
+@payable
+def __default__():
+    pass
