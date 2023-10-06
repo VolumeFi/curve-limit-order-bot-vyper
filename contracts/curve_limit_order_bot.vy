@@ -137,10 +137,10 @@ def _safe_transfer_from(_token: address, _from: address, _to: address, _value: u
 def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, pools: address[4], profit_taking: uint256, stop_loss: uint256, expire: uint256):
     assert block.timestamp < expire, "Invalidated expire"
     _value: uint256 = msg.value
+    assert self.paloma != empty(bytes32), "Paloma not set"
     _fee: uint256 = self.fee
     if _fee > 0:
         assert _value >= _fee, "Insufficient fee"
-        assert self.paloma != empty(bytes32), "Paloma not set"
         send(self.refund_wallet, _fee)
         _value = unsafe_sub(_value, _fee)
     if route[0] == VETH:
