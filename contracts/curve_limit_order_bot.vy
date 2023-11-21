@@ -125,8 +125,8 @@ def deposit(route: address[11], swap_params: uint256[5][5], amount: uint256, poo
         depositor: msg.sender
     })
     last_token: address = empty(address)
-    for i in range(4):
-        last_token = deposit.route[8 - i * 2]
+    for i in range(5):
+        last_token = deposit.route[unsafe_sub(10, unsafe_add(i, i))]
         if last_token != empty(address):
             break
     deposit_id: uint256 = self.deposit_size
@@ -166,8 +166,8 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
         return deposit.amount
     else:
         last_token: address = empty(address)
-        for i in range(4):
-            last_token = deposit.route[8 - i * 2]
+        for i in range(5):
+            last_token = deposit.route[unsafe_sub(10, unsafe_add(i, i))]
             if last_token != empty(address):
                 break
         amount0: uint256 = 0
