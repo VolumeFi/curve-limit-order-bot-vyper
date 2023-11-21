@@ -1,4 +1,4 @@
-# @version 0.3.7
+# @version 0.3.10
 
 """
 @title Curve Limit Order Bot
@@ -7,10 +7,10 @@
 """
 
 struct Deposit:
-    route: address[9]
-    swap_params: uint256[3][4]
+    route: address[11]
+    swap_params: uint256[5][5]
     amount: uint256
-    pools: address[4]
+    pools: address[5]
     depositor: address
 
 enum WithdrawType:
@@ -26,14 +26,7 @@ interface WrappedEth:
     def deposit(): payable
 
 interface CurveSwapRouter:
-    def exchange_multiple(
-        _route: address[9],
-        _swap_params: uint256[3][4],
-        _amount: uint256,
-        _expected: uint256,
-        _pools: address[4]=[ZERO_ADDRESS, ZERO_ADDRESS, ZERO_ADDRESS, ZERO_ADDRESS],
-        _receiver: address=msg.sender
-    ) -> uint256: payable
+    def exchange(_route: address[11], _swap_params: uint256[5][5], _amount: uint256, _expected: uint256, _pools: address[5], _receiver: address) -> uint256: payable
 
 event Deposited:
     deposit_id: uint256
@@ -134,7 +127,7 @@ def _safe_transfer_from(_token: address, _from: address, _to: address, _value: u
 @external
 @payable
 @nonreentrant("lock")
-def deposit(route: address[9], swap_params: uint256[3][4], amount: uint256, pools: address[4], profit_taking: uint256, stop_loss: uint256, expire: uint256):
+def deposit(route: address[11], swap_params: uint256[5][5], amount: uint256, pools: address[5], profit_taking: uint256, stop_loss: uint256, expire: uint256):
     assert block.timestamp < expire, "Invalidated expire"
     _value: uint256 = msg.value
     assert self.paloma != empty(bytes32), "Paloma not set"
@@ -175,10 +168,10 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
     if withdraw_type == WithdrawType.CANCEL:
         assert msg.sender == deposit.depositor or msg.sender == empty(address), "Unauthorized"
     self.deposits[deposit_id] = Deposit({
-        route: empty(address[9]),
-        swap_params: empty(uint256[3][4]),
+        route: empty(address[11]),
+        swap_params: empty(uint256[5][5]),
         amount: empty(uint256),
-        pools: empty(address[4]),
+        pools: empty(address[5]),
         depositor: empty(address)
     })
     service_fee_amount: uint256 = 0
@@ -206,7 +199,7 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
         amount0: uint256 = 0
         actual_amount: uint256 = 0
         if deposit.route[0] == VETH:
-            amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self, value=deposit.amount)
+            amount0 = CurveSwapRouter(ROUTER).exchange(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self, value=deposit.amount)
             if _service_fee > 0:
                 service_fee_amount = unsafe_div(amount0 * _service_fee, DENOMINATOR)
             actual_amount = unsafe_sub(amount0, service_fee_amount)
@@ -220,7 +213,7 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
                     self._safe_transfer(last_token, self.service_fee_collector, service_fee_amount)
         else:
             self._safe_approve(deposit.route[0], ROUTER, deposit.amount)
-            amount0 = CurveSwapRouter(ROUTER).exchange_multiple(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
+            amount0 = CurveSwapRouter(ROUTER).exchange(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
             if _service_fee > 0:
                 service_fee_amount = unsafe_div(amount0 * _service_fee, DENOMINATOR)
             actual_amount = unsafe_sub(amount0, service_fee_amount)
