@@ -73,7 +73,7 @@ event UpdateServiceFee:
 
 VETH: constant(address) = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE # Virtual ETH
 MAX_SIZE: constant(uint256) = 8
-DENOMINATOR: constant(uint256) = 10000
+DENOMINATOR: constant(uint256) = 10 ** 18
 ROUTER: immutable(address)
 compass: public(address)
 deposit_size: public(uint256)
@@ -116,7 +116,7 @@ def deposit(route: address[11], swap_params: uint256[5][5], amount: uint256, poo
             send(msg.sender, unsafe_sub(_value, amount))
     else:
         send(msg.sender, _value)
-        assert ERC20(route[0]).transferFrom(msg.sender, self, amount, default_return_value=True), "TF fail"
+        assert ERC20(route[0]).transferFrom(msg.sender, self, amount, default_return_value=True), "Failed transferFrom"
     deposit: Deposit = Deposit({
         route: route,
         swap_params: swap_params,
@@ -133,6 +133,10 @@ def deposit(route: address[11], swap_params: uint256[5][5], amount: uint256, poo
     self.deposits[deposit_id] = deposit
     self.deposit_size = unsafe_add(deposit_id, 1)
     log Deposited(deposit_id, route[0], last_token, amount, msg.sender, profit_taking, stop_loss, expire)
+
+@internal
+def _safe_transfer(_token: address, _to: address, _value: uint256):
+    assert ERC20(_token).transfer(_to, _value, default_return_value=True), "Failed transfer"
 
 @internal
 @nonreentrant("lock")
@@ -159,9 +163,9 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
             if service_fee_amount > 0:
                 send(self.service_fee_collector, service_fee_amount)
         else:
-            assert ERC20(deposit.route[0]).transfer(deposit.depositor, actual_amount, default_return_value=True), "Tr fail"
+            self._safe_transfer(deposit.route[0], deposit.depositor, actual_amount)
             if service_fee_amount > 0:
-                assert ERC20(deposit.route[0]).transfer(self.service_fee_collector, service_fee_amount, default_return_value=True), "Tr fail"
+                self._safe_transfer(deposit.route[0], self.service_fee_collector, service_fee_amount)
         log Withdrawn(deposit_id, msg.sender, withdraw_type, actual_amount)
         return deposit.amount
     else:
@@ -182,11 +186,11 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
                 if service_fee_amount > 0:
                     send(self.service_fee_collector, service_fee_amount)
             else:
-                assert ERC20(last_token).transfer(deposit.depositor, actual_amount, default_return_value=True), "Tr fail"
+                self._safe_transfer(last_token, deposit.depositor, actual_amount)
                 if service_fee_amount > 0:
-                    assert ERC20(last_token).transfer(self.service_fee_collector, service_fee_amount, default_return_value=True), "Tr fail"
+                    self._safe_transfer(last_token, self.service_fee_collector, service_fee_amount)
         else:
-            assert ERC20(deposit.route[0]).approve(ROUTER, deposit.amount, default_return_value=True), "Ap fail"
+            assert ERC20(deposit.route[0]).approve(ROUTER, deposit.amount, default_return_value=True), "Failed approve"
             amount0 = CurveSwapRouter(ROUTER).exchange(deposit.route, deposit.swap_params, deposit.amount, expected, deposit.pools, self)
             if _service_fee > 0:
                 service_fee_amount = unsafe_div(amount0 * _service_fee, DENOMINATOR)
@@ -196,9 +200,9 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
                 if service_fee_amount > 0:
                     send(self.service_fee_collector, service_fee_amount)
             else:
-                assert ERC20(last_token).transfer(deposit.depositor, actual_amount, default_return_value=True), "Tr fail"
+                self._safe_transfer(last_token, deposit.depositor, actual_amount)
                 if service_fee_amount > 0:
-                    assert ERC20(last_token).transfer(self.service_fee_collector, service_fee_amount, default_return_value=True), "Tr fail"
+                    self._safe_transfer(last_token, self.service_fee_collector, service_fee_amount)
         log Withdrawn(deposit_id, msg.sender, withdraw_type, actual_amount)
         return amount0
 
@@ -206,14 +210,16 @@ def _withdraw(deposit_id: uint256, expected: uint256, withdraw_type: WithdrawTyp
 def cancel(deposit_id: uint256, expected: uint256) -> uint256:
     return self._withdraw(deposit_id, expected, WithdrawType.CANCEL)
 
+@internal
+def _paloma_check():
+    assert msg.sender == self.compass, "Not compass"
+    assert self.paloma == convert(slice(msg.data, unsafe_sub(len(msg.data), 32), 32), bytes32), "Invalid paloma"
+
 @external
 def multiple_withdraw(deposit_ids: DynArray[uint256, MAX_SIZE], expected: DynArray[uint256, MAX_SIZE], withdraw_types: DynArray[WithdrawType, MAX_SIZE]):
-    assert msg.sender == self.compass, "Unauthorized"
+    self._paloma_check()
     _len: uint256 = len(deposit_ids)
     assert _len == len(expected) and _len == len(withdraw_types), "Validation error"
-    _len = unsafe_add(unsafe_mul(unsafe_add(_len, 2), 96), 36)
-    assert len(msg.data) == _len, "invalid payload"
-    assert self.paloma == convert(slice(msg.data, unsafe_sub(_len, 32), 32), bytes32), "invalid paloma"
     for i in range(MAX_SIZE):
         if i >= len(deposit_ids):
             break
@@ -226,20 +232,20 @@ def withdraw(deposit_id: uint256, withdraw_type: WithdrawType) -> uint256:
 
 @external
 def update_compass(new_compass: address):
-    assert msg.sender == self.compass and len(msg.data) == 68 and convert(slice(msg.data, 36, 32), bytes32) == self.paloma, "Unauthorized"
+    self._paloma_check()
     self.compass = new_compass
     log UpdateCompass(msg.sender, new_compass)
 
 @external
 def update_refund_wallet(new_refund_wallet: address):
-    assert msg.sender == self.compass and len(msg.data) == 68 and convert(slice(msg.data, 36, 32), bytes32) == self.paloma, "Unauthorized"
+    self._paloma_check()
     old_refund_wallet: address = self.refund_wallet
     self.refund_wallet = new_refund_wallet
     log UpdateRefundWallet(old_refund_wallet, new_refund_wallet)
 
 @external
 def update_fee(new_fee: uint256):
-    assert msg.sender == self.compass and len(msg.data) == 68 and convert(slice(msg.data, 36, 32), bytes32) == self.paloma, "Unauthorized"
+    self._paloma_check()
     old_fee: uint256 = self.fee
     self.fee = new_fee
     log UpdateFee(old_fee, new_fee)
@@ -253,13 +259,13 @@ def set_paloma():
 
 @external
 def update_service_fee_collector(new_service_fee_collector: address):
-    assert msg.sender == self.service_fee_collector, "Unauthorized"
+    self._paloma_check()
     self.service_fee_collector = new_service_fee_collector
     log UpdateServiceFeeCollector(msg.sender, new_service_fee_collector)
 
 @external
 def update_service_fee(new_service_fee: uint256):
-    assert msg.sender == self.compass and len(msg.data) == 68 and convert(slice(msg.data, 36, 32), bytes32) == self.paloma, "Unauthorized"
+    self._paloma_check()
     assert new_service_fee < DENOMINATOR
     old_service_fee: uint256 = self.service_fee
     self.service_fee = new_service_fee
